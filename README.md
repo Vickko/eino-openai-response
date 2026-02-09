@@ -86,6 +86,14 @@ msg, err := client.Generate(ctx, messages,
 // msg.ReasoningContent contains the reasoning summary
 ```
 
+### Multi-Turn With Server-Side State (Optional)
+
+If you enable `store`, this client will save the Responses API `response_id` into `schema.Message.Extra`.
+On the next turn, if you pass the previous assistant message back in `messages`, the client will
+automatically set `previous_response_id` and only send the incremental inputs.
+
+You can also read the id via `openairesponse.GetResponseID(msg)`.
+
 ## Features
 
 - Implements `model.ChatModel` interface from Eino
@@ -95,6 +103,7 @@ msg, err := client.Generate(ctx, messages,
 - Function calling / tool use
 - Reasoning configuration (`effort` + `summary`)
 - Token usage reporting
+- Stores `response_id` in `schema.Message.Extra` for multi-turn via server-side state
 - Eino callbacks integration
 
 ## Running Tests
@@ -103,6 +112,9 @@ msg, err := client.Generate(ctx, messages,
 export OPENAI_API_KEY=sk-xxx
 export OPENAI_BASE_URL=https://api.openai.com/v1  # optional
 go test -v ./...
+
+# Integration tests (real API calls)
+go test -tags=integration -v ./...
 ```
 
 ## License

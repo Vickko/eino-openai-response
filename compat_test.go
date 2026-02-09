@@ -1,3 +1,5 @@
+//go:build integration
+
 package openairesponse
 
 import (
@@ -12,10 +14,10 @@ func TestOldModelsCompatibility(t *testing.T) {
 	ctx := context.Background()
 
 	models := []string{
-		"gpt-4o-mini",     // 较新模型
-		"gpt-4o",          // 较新模型
-		"gpt-4-turbo",     // 旧模型
-		"gpt-3.5-turbo",   // 旧模型
+		"gpt-4o-mini",   // 较新模型
+		"gpt-4o",        // 较新模型
+		"gpt-4-turbo",   // 旧模型
+		"gpt-3.5-turbo", // 旧模型
 	}
 
 	for _, modelName := range models {
