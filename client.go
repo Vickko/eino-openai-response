@@ -118,6 +118,7 @@ func (c *Client) Generate(ctx context.Context, messages []*schema.Message, opts 
 
 	// 转换为 schema.Message
 	msg := toSchemaMessage(response.Output, response.Usage)
+	setResponseID(msg, response.ID)
 
 	// 回调 OnEnd
 	_ = callbacks.OnEnd(ctx, &model.CallbackOutput{
@@ -273,8 +274,27 @@ func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Opti
 		return nil, nil, nil, fmt.Errorf("stop is not supported by Responses API")
 	}
 
+	// If store is enabled, we can try to reuse server-side state via previous_response_id
+	// by extracting response_id from history messages and only sending incremental inputs.
+	messagesForRequest := messages
+	if opts.PreviousResponseID == "" {
+		store := opts.Store
+		if store == nil {
+			store = c.config.Store
+		}
+		if store != nil && *store {
+			if id, idx, ok := findLastResponseID(messages); ok {
+				if idx+1 >= len(messages) {
+					return nil, nil, nil, fmt.Errorf("not found incremental input after response id")
+				}
+				opts.PreviousResponseID = id
+				messagesForRequest = messages[idx+1:]
+			}
+		}
+	}
+
 	// 转换消息
-	input, instructions, err := toResponsesInput(messages)
+	input, instructions, err := toResponsesInput(messagesForRequest)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("convert messages: %w", err)
 	}
@@ -337,6 +357,12 @@ func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Opti
 	}
 	if opts.PreviousResponseID != "" {
 		req.PreviousResponseID = opts.PreviousResponseID
+		// If user is using server-side state, we should store this response by default
+		// so it can be referenced in the next turn.
+		if req.Store == nil {
+			storeTrue := true
+			req.Store = &storeTrue
+		}
 	}
 
 	// Resolve tools for this request (model.WithTools overrides bound tools).
@@ -364,6 +390,12 @@ func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Opti
 	toolChoice := commonOpts.ToolChoice
 	if toolChoice == nil {
 		toolChoice = c.defaultToolChoice
+	}
+
+	// When continuing a server-side session, avoid sending tools/tool_choice again.
+	// This matches the conservative behavior in eino-ext/ark.
+	if req.PreviousResponseID != "" {
+		return req, toolInfos, toolChoice, nil
 	}
 
 	if len(toolInfos) > 0 {
