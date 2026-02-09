@@ -55,6 +55,12 @@ func toResponsesInput(messages []*schema.Message) ([]InputItem, string, error) {
 
 			// If assistant message contains tool calls, convert them into function_call input items.
 			for _, tc := range msg.ToolCalls {
+				if strings.TrimSpace(tc.ID) == "" {
+					return nil, "", fmt.Errorf("assistant tool call id is required")
+				}
+				if strings.TrimSpace(tc.Function.Name) == "" {
+					return nil, "", fmt.Errorf("assistant tool call name is required (call_id=%s)", tc.ID)
+				}
 				input = append(input, InputItem{
 					Type:      "function_call",
 					CallID:    tc.ID,

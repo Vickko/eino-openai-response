@@ -392,12 +392,6 @@ func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Opti
 		toolChoice = c.defaultToolChoice
 	}
 
-	// When continuing a server-side session, avoid sending tools/tool_choice again.
-	// This matches the conservative behavior in eino-ext/ark.
-	if req.PreviousResponseID != "" {
-		return req, toolInfos, toolChoice, nil
-	}
-
 	if len(toolInfos) > 0 {
 		tools, err := toTools(toolInfos)
 		if err != nil {
@@ -407,6 +401,15 @@ func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Opti
 	}
 
 	if toolChoice != nil {
+		// Guard against invalid requests like: tool_choice="required" with zero tools.
+		// This can happen when tools are filtered out by AllowedToolNames.
+		if len(toolInfos) == 0 {
+			if *toolChoice == schema.ToolChoiceForced {
+				return nil, nil, nil, fmt.Errorf("tool_choice=required but no tools are available for this request")
+			}
+			// If there are no tools, omit tool_choice entirely.
+			return req, toolInfos, toolChoice, nil
+		}
 		req.ToolChoice = toResponsesToolChoice(*toolChoice, commonOpts.AllowedToolNames)
 	}
 
