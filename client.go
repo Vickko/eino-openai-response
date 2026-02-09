@@ -37,6 +37,14 @@ const (
 // Client OpenAI Responses API 客户端
 type Client struct {
 	config *Config
+
+	// rawTools/tools are the tools bound to this model instance via BindTools/WithTools.
+	// They are used when caller does not pass model.WithTools(...) in per-call options.
+	rawTools []*schema.ToolInfo
+	tools    []FunctionTool
+
+	// defaultToolChoice is used when tools are bound and caller does not pass model.WithToolChoice(...).
+	defaultToolChoice *schema.ToolChoice
 }
 
 // NewChatModel 创建 Responses API 客户端
@@ -58,21 +66,30 @@ func NewChatModel(ctx context.Context, config *Config) (*Client, error) {
 
 // Generate 生成响应 (同步)
 func (c *Client) Generate(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.Message, error) {
-	// 获取选项
+	// Common options (shared across models in Eino)
+	commonOpts := model.GetCommonOptions(&model.Options{
+		Temperature: c.config.Temperature,
+		MaxTokens:   c.config.MaxOutputTokens,
+		Model:       &c.config.Model,
+		TopP:        c.config.TopP,
+	}, opts...)
+
+	// Implementation-specific options
 	options := getOptions(c.config, opts)
 
 	// 构建请求
-	req, err := c.buildRequest(messages, options, false)
+	req, toolInfos, toolChoice, err := c.buildRequest(messages, commonOpts, options, false)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	// 回调 OnStart
 	ctx = callbacks.OnStart(ctx, &model.CallbackInput{
-		Messages: messages,
-		Tools:    nil, // TODO: 从 opts 获取 tools
+		Messages:   messages,
+		Tools:      toolInfos,
+		ToolChoice: toolChoice,
 		Config: &model.Config{
-			Model: c.config.Model,
+			Model: req.Model,
 		},
 	})
 
@@ -104,7 +121,9 @@ func (c *Client) Generate(ctx context.Context, messages []*schema.Message, opts 
 
 	// 回调 OnEnd
 	_ = callbacks.OnEnd(ctx, &model.CallbackOutput{
-		Message: msg,
+		Message:    msg,
+		Config:     &model.Config{Model: req.Model},
+		TokenUsage: toModelTokenUsage(response.Usage),
 	})
 
 	return msg, nil
@@ -112,20 +131,27 @@ func (c *Client) Generate(ctx context.Context, messages []*schema.Message, opts 
 
 // Stream 流式生成
 func (c *Client) Stream(ctx context.Context, messages []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
-	// 获取选项
+	commonOpts := model.GetCommonOptions(&model.Options{
+		Temperature: c.config.Temperature,
+		MaxTokens:   c.config.MaxOutputTokens,
+		Model:       &c.config.Model,
+		TopP:        c.config.TopP,
+	}, opts...)
+
 	options := getOptions(c.config, opts)
 
 	// 构建请求
-	req, err := c.buildRequest(messages, options, true)
+	req, toolInfos, toolChoice, err := c.buildRequest(messages, commonOpts, options, true)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
 
 	cbInput := &model.CallbackInput{
-		Messages: messages,
-		Tools:    nil,
+		Messages:   messages,
+		Tools:      toolInfos,
+		ToolChoice: toolChoice,
 		Config: &model.Config{
-			Model: c.config.Model,
+			Model: req.Model,
 		},
 	}
 
@@ -202,9 +228,14 @@ func (c *Client) Stream(ctx context.Context, messages []*schema.Message, opts ..
 			}
 
 			if msg != nil {
+				var tokenUsage *model.TokenUsage
+				if msg.ResponseMeta != nil && msg.ResponseMeta.Usage != nil {
+					tokenUsage = toModelTokenUsageFromSchema(msg.ResponseMeta.Usage)
+				}
 				closed := sw.Send(&model.CallbackOutput{
-					Message: msg,
-					Config:  cbInput.Config,
+					Message:    msg,
+					Config:     cbInput.Config,
+					TokenUsage: tokenUsage,
 				}, nil)
 				if closed {
 					return
@@ -234,11 +265,18 @@ func (c *Client) Stream(ctx context.Context, messages []*schema.Message, opts ..
 }
 
 // buildRequest 构建请求
-func (c *Client) buildRequest(messages []*schema.Message, opts *responsesOptions, stream bool) (*ResponsesRequest, error) {
+func (c *Client) buildRequest(messages []*schema.Message, commonOpts *model.Options, opts *responsesOptions, stream bool) (*ResponsesRequest, []*schema.ToolInfo, *schema.ToolChoice, error) {
+	if commonOpts == nil {
+		commonOpts = &model.Options{}
+	}
+	if len(commonOpts.Stop) > 0 {
+		return nil, nil, nil, fmt.Errorf("stop is not supported by Responses API")
+	}
+
 	// 转换消息
 	input, instructions, err := toResponsesInput(messages)
 	if err != nil {
-		return nil, fmt.Errorf("convert messages: %w", err)
+		return nil, nil, nil, fmt.Errorf("convert messages: %w", err)
 	}
 
 	// 使用选项中的 instructions 覆盖
@@ -246,8 +284,13 @@ func (c *Client) buildRequest(messages []*schema.Message, opts *responsesOptions
 		instructions = opts.Instructions
 	}
 
+	modelName := c.config.Model
+	if commonOpts.Model != nil && *commonOpts.Model != "" {
+		modelName = *commonOpts.Model
+	}
+
 	req := &ResponsesRequest{
-		Model:        c.config.Model,
+		Model:        modelName,
 		Stream:       stream,
 		Instructions: instructions,
 	}
@@ -265,15 +308,27 @@ func (c *Client) buildRequest(messages []*schema.Message, opts *responsesOptions
 		}
 	}
 
-	// 设置其他选项
-	if opts.MaxOutputTokens != nil {
+	// max tokens: prefer common option
+	if commonOpts.MaxTokens != nil {
+		req.MaxOutputTokens = commonOpts.MaxTokens
+	} else if opts.MaxOutputTokens != nil {
 		req.MaxOutputTokens = opts.MaxOutputTokens
 	}
-	if opts.Temperature != nil {
+
+	// temperature: prefer common option
+	if commonOpts.Temperature != nil {
+		temp := float64(*commonOpts.Temperature)
+		req.Temperature = &temp
+	} else if opts.Temperature != nil {
 		temp := float64(*opts.Temperature)
 		req.Temperature = &temp
 	}
-	if opts.TopP != nil {
+
+	// top_p: prefer common option
+	if commonOpts.TopP != nil {
+		topP := float64(*commonOpts.TopP)
+		req.TopP = &topP
+	} else if opts.TopP != nil {
 		topP := float64(*opts.TopP)
 		req.TopP = &topP
 	}
@@ -284,7 +339,46 @@ func (c *Client) buildRequest(messages []*schema.Message, opts *responsesOptions
 		req.PreviousResponseID = opts.PreviousResponseID
 	}
 
-	return req, nil
+	// Resolve tools for this request (model.WithTools overrides bound tools).
+	toolInfos := c.rawTools
+	if commonOpts.Tools != nil {
+		toolInfos = commonOpts.Tools
+	}
+	if len(commonOpts.AllowedToolNames) > 0 && len(toolInfos) > 0 {
+		allowed := make(map[string]struct{}, len(commonOpts.AllowedToolNames))
+		for _, n := range commonOpts.AllowedToolNames {
+			allowed[n] = struct{}{}
+		}
+		filtered := make([]*schema.ToolInfo, 0, len(toolInfos))
+		for _, ti := range toolInfos {
+			if ti == nil {
+				continue
+			}
+			if _, ok := allowed[ti.Name]; ok {
+				filtered = append(filtered, ti)
+			}
+		}
+		toolInfos = filtered
+	}
+
+	toolChoice := commonOpts.ToolChoice
+	if toolChoice == nil {
+		toolChoice = c.defaultToolChoice
+	}
+
+	if len(toolInfos) > 0 {
+		tools, err := toTools(toolInfos)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("convert tools: %w", err)
+		}
+		req.Tools = tools
+	}
+
+	if toolChoice != nil {
+		req.ToolChoice = toResponsesToolChoice(*toolChoice, commonOpts.AllowedToolNames)
+	}
+
+	return req, toolInfos, toolChoice, nil
 }
 
 // doRequest 发送 HTTP 请求
@@ -336,8 +430,19 @@ func (c *Client) doRequest(ctx context.Context, req *ResponsesRequest) (*http.Re
 
 // BindTools 绑定工具
 func (c *Client) BindTools(tools []*schema.ToolInfo) error {
-	// OpenAI Responses API 支持在请求中传递工具
-	// 这里可以存储工具定义供后续使用
+	if len(tools) == 0 {
+		return fmt.Errorf("no tools to bind")
+	}
+
+	converted, err := toTools(tools)
+	if err != nil {
+		return err
+	}
+
+	tc := schema.ToolChoiceAllowed
+	c.rawTools = tools
+	c.tools = converted
+	c.defaultToolChoice = &tc
 	return nil
 }
 
@@ -353,3 +458,24 @@ func (c *Client) IsCallbacksEnabled() bool {
 
 // 确保实现了接口
 var _ model.ChatModel = (*Client)(nil)
+var _ model.ToolCallingChatModel = (*Client)(nil)
+
+// WithTools returns a new client with tools bound.
+// This avoids mutating the existing client and is safer for concurrent use.
+func (c *Client) WithTools(tools []*schema.ToolInfo) (model.ToolCallingChatModel, error) {
+	if len(tools) == 0 {
+		return nil, fmt.Errorf("no tools to bind")
+	}
+	converted, err := toTools(tools)
+	if err != nil {
+		return nil, err
+	}
+
+	tc := schema.ToolChoiceAllowed
+
+	nc := *c
+	nc.rawTools = tools
+	nc.tools = converted
+	nc.defaultToolChoice = &tc
+	return &nc, nil
+}
