@@ -65,6 +65,10 @@ type InputItem struct {
 	Role    string `json:"role,omitempty"`
 	Content any    `json:"content,omitempty"` // string 或 []ContentItem
 
+	// function_call 类型使用
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+
 	// function_call_output 类型使用
 	CallID string `json:"call_id,omitempty"`
 	Output string `json:"output,omitempty"`
@@ -152,11 +156,11 @@ type SummaryItem struct {
 
 // Usage token 使用统计
 type Usage struct {
-	InputTokens        int                 `json:"input_tokens"`
-	InputTokensDetails *InputTokensDetails `json:"input_tokens_details,omitempty"`
-	OutputTokens       int                 `json:"output_tokens"`
+	InputTokens         int                  `json:"input_tokens"`
+	InputTokensDetails  *InputTokensDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokens        int                  `json:"output_tokens"`
 	OutputTokensDetails *OutputTokensDetails `json:"output_tokens_details,omitempty"`
-	TotalTokens        int                 `json:"total_tokens"`
+	TotalTokens         int                  `json:"total_tokens"`
 }
 
 // InputTokensDetails 输入 token 详情

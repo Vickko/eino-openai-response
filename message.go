@@ -48,7 +48,20 @@ func toResponsesInput(messages []*schema.Message) ([]InputItem, string, error) {
 			if err != nil {
 				return nil, "", fmt.Errorf("convert assistant message: %w", err)
 			}
-			input = append(input, item)
+			// Only append the message item if it has actual content.
+			if hasInputContent(item.Content) {
+				input = append(input, item)
+			}
+
+			// If assistant message contains tool calls, convert them into function_call input items.
+			for _, tc := range msg.ToolCalls {
+				input = append(input, InputItem{
+					Type:      "function_call",
+					CallID:    tc.ID,
+					Name:      tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				})
+			}
 		case schema.Tool:
 			item := toToolOutputItem(msg)
 			input = append(input, item)
@@ -58,6 +71,21 @@ func toResponsesInput(messages []*schema.Message) ([]InputItem, string, error) {
 	}
 
 	return input, instructions, nil
+}
+
+func hasInputContent(content any) bool {
+	if content == nil {
+		return false
+	}
+	switch v := content.(type) {
+	case string:
+		return v != ""
+	case []ContentItem:
+		return len(v) > 0
+	default:
+		// Unknown type: keep conservative and treat it as present.
+		return true
+	}
 }
 
 // toUserInputItem 转换用户消息

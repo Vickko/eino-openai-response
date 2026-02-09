@@ -125,7 +125,6 @@ func TestGenerate_AllowedToolNamesFiltersTools(t *testing.T) {
 		t.Fatalf("NewChatModel: %v", err)
 	}
 
-	// bind two tools
 	tc, err := client.WithTools([]*schema.ToolInfo{mustTool(t, "tool_a"), mustTool(t, "tool_b")})
 	if err != nil {
 		t.Fatalf("WithTools: %v", err)
@@ -146,5 +145,67 @@ func TestGenerate_AllowedToolNamesFiltersTools(t *testing.T) {
 	fn, _ := first["function"].(map[string]any)
 	if fn["name"] != "tool_b" {
 		t.Fatalf("expected tool_b, got: %v", fn["name"])
+	}
+}
+
+func TestGenerate_IncludesAssistantToolCallsInInput(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &got)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewChatModel(context.Background(), &Config{
+		APIKey:  "test-key",
+		BaseURL: srv.URL,
+		Model:   "gpt-4o-mini",
+	})
+	if err != nil {
+		t.Fatalf("NewChatModel: %v", err)
+	}
+
+	msgs := []*schema.Message{
+		{Role: schema.User, Content: "use tool"},
+		{
+			Role: schema.Assistant,
+			ToolCalls: []schema.ToolCall{
+				{
+					ID:   "call_1",
+					Type: "function",
+					Function: schema.FunctionCall{
+						Name:      "tool_a",
+						Arguments: `{"q":"x"}`,
+					},
+				},
+			},
+		},
+		{Role: schema.Tool, ToolCallID: "call_1", Content: `{"result":"y"}`},
+		{Role: schema.User, Content: "continue"},
+	}
+
+	_, err = client.Generate(context.Background(), msgs)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	input, ok := got["input"].([]any)
+	if !ok {
+		t.Fatalf("expected input list, got: %T %v", got["input"], got["input"])
+	}
+
+	var found bool
+	for _, it := range input {
+		m, _ := it.(map[string]any)
+		if m["type"] == "function_call" {
+			if m["call_id"] == "call_1" && m["name"] == "tool_a" && m["arguments"] == `{"q":"x"}` {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a function_call input item, got input: %v", input)
 	}
 }
