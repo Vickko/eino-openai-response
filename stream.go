@@ -32,6 +32,8 @@ type streamReader struct {
 	closer   io.Closer
 	response *ResponsesResponse
 	err      error
+
+	done bool
 }
 
 // newStreamReader 创建流读取器
@@ -50,63 +52,106 @@ func (s *streamReader) Close() error {
 // Recv 接收下一条消息
 // 返回增量消息，当流结束时返回 io.EOF
 func (s *streamReader) Recv() (*schema.Message, error) {
+	if s.done {
+		return nil, io.EOF
+	}
+
 	for {
-		line, err := s.reader.ReadString('\n')
+		eventType, data, err := s.readSSEEvent()
 		if err != nil {
 			if err == io.EOF {
+				s.done = true
 				return nil, io.EOF
 			}
-			return nil, fmt.Errorf("read stream: %w", err)
+			return nil, err
+		}
+		if data == "[DONE]" {
+			s.done = true
+			return nil, io.EOF
 		}
 
-		line = strings.TrimSpace(line)
-
-		// 跳过空行
-		if line == "" {
+		// Some providers may send events without an explicit "event:" line.
+		if eventType == "" {
 			continue
 		}
 
-		// 跳过注释
+		msg, done, err := s.handleEvent(eventType, data)
+		if err != nil {
+			s.done = done
+			return nil, err
+		}
+
+		if msg != nil && s.response != nil && s.response.ID != "" {
+			setResponseID(msg, s.response.ID)
+		}
+
+		if done {
+			s.done = true
+			if msg != nil {
+				return msg, nil
+			}
+			return nil, io.EOF
+		}
+		if msg != nil {
+			return msg, nil
+		}
+	}
+}
+
+// readSSEEvent reads one SSE event and returns (eventType, data).
+// It supports multi-line data blocks and ignores comments.
+func (s *streamReader) readSSEEvent() (string, string, error) {
+	var (
+		eventType string
+		dataLines []string
+	)
+
+	for {
+		line, err := s.reader.ReadString('\n')
+		if err != nil {
+			// handle last line without trailing '\n'
+			if err == io.EOF && len(line) > 0 {
+				line = strings.TrimRight(line, "\r\n")
+			} else if err == io.EOF {
+				// Stream may end without the trailing blank line. If we already
+				// collected something, flush it as the last event.
+				if eventType != "" || len(dataLines) > 0 {
+					return eventType, strings.Join(dataLines, "\n"), nil
+				}
+				return "", "", io.EOF
+			} else {
+				return "", "", fmt.Errorf("read stream: %w", err)
+			}
+		} else {
+			line = strings.TrimRight(line, "\r\n")
+		}
+
+		// event ends with a blank line
+		if line == "" {
+			if eventType == "" && len(dataLines) == 0 {
+				// skip extra blank lines
+				continue
+			}
+			return eventType, strings.Join(dataLines, "\n"), nil
+		}
+
+		// comment
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
 
-		// 解析事件类型
 		if strings.HasPrefix(line, "event:") {
-			eventType := strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			// 读取数据行
-			dataLine, err := s.reader.ReadString('\n')
-			if err != nil {
-				return nil, fmt.Errorf("read data line: %w", err)
-			}
-			dataLine = strings.TrimSpace(dataLine)
-			if !strings.HasPrefix(dataLine, "data:") {
-				continue
-			}
-			data := strings.TrimPrefix(dataLine, "data:")
-			data = strings.TrimSpace(data)
-
-			msg, done, err := s.handleEvent(eventType, data)
-			if err != nil {
-				return nil, err
-			}
-			if done {
-				return nil, io.EOF
-			}
-			if msg != nil {
-				return msg, nil
-			}
+			eventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 			continue
 		}
 
-		// 处理纯 data: 行
 		if strings.HasPrefix(line, "data:") {
-			data := strings.TrimPrefix(line, "data:")
-			data = strings.TrimSpace(data)
-			if data == "[DONE]" {
-				return nil, io.EOF
-			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			dataLines = append(dataLines, data)
+			continue
 		}
+
+		// ignore other fields: id:, retry:, etc.
 	}
 }
 
