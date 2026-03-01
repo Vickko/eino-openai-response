@@ -5,7 +5,6 @@ package openairesponse
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"testing"
 
@@ -56,11 +55,11 @@ func TestGPT5StreamReasoning(t *testing.T) {
 
 		if msg.Content != "" {
 			fullContent += msg.Content
-			fmt.Printf("Content: %q\n", msg.Content)
+			t.Logf("Content: %q", msg.Content)
 		}
 		if msg.ReasoningContent != "" {
 			fullReasoning += msg.ReasoningContent
-			fmt.Printf(">>> Reasoning: %q\n", msg.ReasoningContent)
+			t.Logf(">>> Reasoning: %q", msg.ReasoningContent)
 		}
 	}
 

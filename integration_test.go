@@ -18,7 +18,7 @@ func TestReasoningSummaryIntegration(t *testing.T) {
 	client, err := NewChatModel(ctx, &Config{
 		APIKey:  testAPIKey,
 		BaseURL: testBaseURL,
-		Model:   "o1-mini", // 支持 reasoning 的模型
+		Model:   "gpt-5",
 	})
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
@@ -73,11 +73,10 @@ func TestReasoningSummaryIntegration(t *testing.T) {
 func TestReasoningSummaryStreamIntegration(t *testing.T) {
 	ctx := context.Background()
 
-	// 流式模式下代理服务对 o1-mini 有问题，使用 gpt-4o-mini 测试基本流式功能
 	client, err := NewChatModel(ctx, &Config{
 		APIKey:  testAPIKey,
 		BaseURL: testBaseURL,
-		Model:   "gpt-4o-mini",
+		Model:   "gpt-5",
 	})
 	if err != nil {
 		t.Fatalf("failed to create client: %v", err)
@@ -90,8 +89,10 @@ func TestReasoningSummaryStreamIntegration(t *testing.T) {
 		},
 	}
 
-	stream, err := client.Stream(ctx, messages)
-	// 注：gpt-4o-mini 不支持 reasoning，这里只测试流式基本功能
+	stream, err := client.Stream(ctx, messages,
+		WithReasoningEffort(ReasoningEffortLow),
+		WithReasoningSummary(ReasoningSummaryDetailed),
+	)
 	if err != nil {
 		t.Fatalf("Stream failed: %v", err)
 	}
@@ -127,9 +128,9 @@ func TestReasoningSummaryStreamIntegration(t *testing.T) {
 	if fullContent == "" {
 		t.Error("Content should not be empty")
 	}
-	if fullReasoning != "" {
-		t.Log("✅ Stream ReasoningContent captured!")
+	if fullReasoning == "" {
+		t.Error("ReasoningContent should not be empty in stream mode")
 	} else {
-		t.Log("⚠️ No streaming reasoning content (may be normal for some providers)")
+		t.Log("✅ Stream ReasoningContent captured!")
 	}
 }

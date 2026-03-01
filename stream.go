@@ -33,14 +33,18 @@ type streamReader struct {
 	response *ResponsesResponse
 	err      error
 
-	done bool
+	done             bool
+	seenArgDeltaIdx  map[int]bool    // 按 output_index 记录已收到 delta 的工具调用
+	seenArgDeltaCall map[string]bool // 按 call_id 记录（部分 provider 的 delta 不含 call_id）
 }
 
 // newStreamReader 创建流读取器
 func newStreamReader(body io.ReadCloser) *streamReader {
 	return &streamReader{
-		reader: bufio.NewReader(body),
-		closer: body,
+		reader:           bufio.NewReader(body),
+		closer:           body,
+		seenArgDeltaIdx:  make(map[int]bool),
+		seenArgDeltaCall: make(map[string]bool),
 	}
 }
 
@@ -198,6 +202,10 @@ func (s *streamReader) handleEvent(eventType, data string) (*schema.Message, boo
 			return nil, false, fmt.Errorf("unmarshal function_call_arguments.delta: %w", err)
 		}
 		if event.Delta != "" {
+			s.seenArgDeltaIdx[event.OutputIndex] = true
+			if event.CallID != "" {
+				s.seenArgDeltaCall[event.CallID] = true
+			}
 			idx := event.OutputIndex
 			return &schema.Message{
 				Role: schema.Assistant,
@@ -220,8 +228,14 @@ func (s *streamReader) handleEvent(eventType, data string) (*schema.Message, boo
 		if err := json.Unmarshal([]byte(data), &event); err != nil {
 			return nil, false, fmt.Errorf("unmarshal output_item.done: %w", err)
 		}
-		// 如果是 function_call 完成，发送完整的工具调用
+		// function_call 完成：Name 始终发送（delta 不含 Name）；
+		// Arguments 仅在未收到过 delta 事件时发送，避免重复
 		if event.Item != nil && event.Item.Type == "function_call" {
+			args := ""
+			hasDelta := s.seenArgDeltaIdx[event.OutputIndex] || s.seenArgDeltaCall[event.Item.CallID]
+			if !hasDelta {
+				args = event.Item.Arguments
+			}
 			return &schema.Message{
 				Role: schema.Assistant,
 				ToolCalls: []schema.ToolCall{
@@ -230,7 +244,7 @@ func (s *streamReader) handleEvent(eventType, data string) (*schema.Message, boo
 						Type: "function",
 						Function: schema.FunctionCall{
 							Name:      event.Item.Name,
-							Arguments: event.Item.Arguments,
+							Arguments: args,
 						},
 					},
 				},

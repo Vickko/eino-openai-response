@@ -93,22 +93,10 @@ type FileURL struct {
 	URL string `json:"url"`
 }
 
-// FunctionTool 函数工具定义
-// 注意：为了兼容 aihubmix 等代理服务，name/description/parameters 直接放在顶层
-// 同时也保留 function 嵌套格式用于标准 OpenAI API
+// FunctionTool 函数工具定义（Responses API 扁平格式）
+// 参考: https://developers.openai.com/api/reference/resources/responses
 type FunctionTool struct {
-	Type     string `json:"type"` // function
-	Name     string `json:"name,omitempty"`
-	Desc     string `json:"description,omitempty"`
-	Params   any    `json:"parameters,omitempty"`
-	Strict   *bool  `json:"strict,omitempty"`
-
-	// 标准 OpenAI 格式（嵌套在 function 对象内）
-	Function *FunctionDefinition `json:"function,omitempty"`
-}
-
-// FunctionDefinition 函数定义
-type FunctionDefinition struct {
+	Type        string `json:"type"`                  // function
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	Parameters  any    `json:"parameters,omitempty"`

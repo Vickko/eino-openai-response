@@ -60,7 +60,6 @@ func TestGenerate_RequestIncludesBoundTools(t *testing.T) {
 	if got["tools"] == nil {
 		t.Fatalf("expected tools in request, got: %v", got)
 	}
-	t.Logf("tools JSON: %#v", got["tools"])
 	if got["tool_choice"] != "auto" {
 		t.Fatalf("expected tool_choice=auto, got: %v", got["tool_choice"])
 	}
@@ -101,9 +100,8 @@ func TestGenerate_PerCallToolsOverrideBoundTools(t *testing.T) {
 		t.Fatalf("expected exactly 1 tool, got: %T %v", got["tools"], got["tools"])
 	}
 	first, _ := tools[0].(map[string]any)
-	fn, _ := first["function"].(map[string]any)
-	if fn["name"] != "tool_b" {
-		t.Fatalf("expected tool_b, got: %v", fn["name"])
+	if first["name"] != "tool_b" {
+		t.Fatalf("expected tool_b, got: %v", first["name"])
 	}
 }
 
@@ -143,9 +141,8 @@ func TestGenerate_AllowedToolNamesFiltersTools(t *testing.T) {
 		t.Fatalf("expected exactly 1 tool after filtering, got: %T %v", got["tools"], got["tools"])
 	}
 	first, _ := tools[0].(map[string]any)
-	fn, _ := first["function"].(map[string]any)
-	if fn["name"] != "tool_b" {
-		t.Fatalf("expected tool_b, got: %v", fn["name"])
+	if first["name"] != "tool_b" {
+		t.Fatalf("expected tool_b, got: %v", first["name"])
 	}
 }
 
@@ -290,9 +287,8 @@ func TestGenerate_PreviousResponseID_IncludesExplicitTools(t *testing.T) {
 		t.Fatalf("expected exactly 1 tool, got: %T %v", got["tools"], got["tools"])
 	}
 	first, _ := tools[0].(map[string]any)
-	fn, _ := first["function"].(map[string]any)
-	if fn["name"] != "tool_b" {
-		t.Fatalf("expected tool_b, got: %v", fn["name"])
+	if first["name"] != "tool_b" {
+		t.Fatalf("expected tool_b, got: %v", first["name"])
 	}
 
 	// input should only contain the incremental message ("next")
