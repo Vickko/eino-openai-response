@@ -60,6 +60,7 @@ func TestGenerate_RequestIncludesBoundTools(t *testing.T) {
 	if got["tools"] == nil {
 		t.Fatalf("expected tools in request, got: %v", got)
 	}
+	t.Logf("tools JSON: %#v", got["tools"])
 	if got["tool_choice"] != "auto" {
 		t.Fatalf("expected tool_choice=auto, got: %v", got["tool_choice"])
 	}

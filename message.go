@@ -364,6 +364,7 @@ func toSchemaTokenUsage(usage *Usage) *schema.TokenUsage {
 }
 
 // toTools 将 schema.ToolInfo 转换为 FunctionTool
+// 为了兼容 aihubmix 等代理服务，同时填充顶层字段和 function 嵌套字段
 func toTools(tools []*schema.ToolInfo) ([]FunctionTool, error) {
 	if len(tools) == 0 {
 		return nil, nil
@@ -382,6 +383,11 @@ func toTools(tools []*schema.ToolInfo) ([]FunctionTool, error) {
 
 		result[i] = FunctionTool{
 			Type: "function",
+			// 顶层字段（兼容 aihubmix 等代理服务）
+			Name:   tool.Name,
+			Desc:   tool.Desc,
+			Params: params,
+			// 嵌套 function 对象（标准 OpenAI 格式）
 			Function: &FunctionDefinition{
 				Name:        tool.Name,
 				Description: tool.Desc,
